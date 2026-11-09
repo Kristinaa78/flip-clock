@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Flip Clock">
+<meta name="theme-color" content="#000000">
+<title>Flip Clock</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-512.png">
+<link rel="preload" href="fonts/oswald.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  @font-face { font-family: "Oswald";      src: url("fonts/oswald.woff2") format("woff2");      font-weight: 600; font-display: block; }
+  @font-face { font-family: "Bebas Neue";  src: url("fonts/bebas-neue.woff2") format("woff2");  font-weight: 400; font-display: block; }
+  @font-face { font-family: "Roboto Mono"; src: url("fonts/roboto-mono.woff2") format("woff2"); font-weight: 600; font-display: block; }
+
+  :root {
+    --bg: #000000;
+    --card: #141414;
+    --digit: #b8b8b8;
+    --accent: #b8b8b8;
+    --font: "Oswald", "Arial Narrow", sans-serif;
+    --fsize: 0.80;   /* digit height relative to card height */
+    --cell: 0.50em;  /* fixed width of each digit = monospace */
+    --shift: 0em;    /* per-font vertical nudge */
+    --weight: 600;
+    --scale: 100;
+    --dur: 500ms;
+    --base: min(30vw, 62vh);
+    --cw: calc(var(--base) * var(--scale) / 100);
+    --ch: calc(var(--cw) * 0.94);
+    --r: calc(var(--cw) * 0.11);
+  }
+  body.no-seconds { --base: min(44vw, 72vh); }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg);
+    background: var(--bgimg, var(--bg));
+    background-attachment: fixed;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  body.hide-cursor { cursor: none; }
+  body.dragging-mode .inner { cursor: grab; touch-action: none; outline: 2px dashed rgba(10,132,255,.7); outline-offset: 12px; border-radius: 12px; }
+  body.dragging-mode .ui { opacity: 1; pointer-events: auto; }
+
+  /* ---------- Clock ---------- */
+  .stage {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: calc(env(safe-area-inset-top) + 4vmin) calc(env(safe-area-inset-right) + 4vmin)
+             calc(env(safe-area-inset-bottom) + 4vmin) calc(env(safe-area-inset-left) + 4vmin);
+    transition: transform 3s ease;
+  }
+  .inner {
+    display: flex; flex-direction: column; align-items: center;
+    gap: calc(var(--cw) * 0.12);
+    transform: translate(var(--ox, 0vw), var(--oy, 0vh));
+  }
+  .clock { display: flex; gap: calc(var(--cw) * 0.05); }
+
+  .card {
+    position: relative;
+    width: var(--cw); height: var(--ch);
+    border-radius: var(--r);
+    perspective: calc(var(--ch) * 4);
+    font-family: var(--font);
+    font-weight: var(--weight);
+    font-size: calc(var(--ch) * var(--fsize));
+    color: var(--digit);
+    border-radius: var(--r);
+    box-shadow: 0 calc(var(--cw) * .05) calc(var(--cw) * .12) rgba(0,0,0,.12);
+    box-shadow: 0 calc(var(--cw) * .05) calc(var(--cw) * .14) color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .card.accent { color: var(--accent); }
+
+  .half, .flap {
+    position: absolute; left: 0; right: 0; height: 50%;
+    overflow: hidden;
+    background: var(--card);
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  }
+  .top, .flap-top    { top: 0;    border-radius: var(--r) var(--r) 0 0; }
+  .bottom, .flap-bot { bottom: 0; border-radius: 0 0 var(--r) var(--r); }
+
+  .num {
+    display: flex; justify-content: center; align-items: center;
+    height: var(--ch);
+    line-height: 1;
+  }
+  .num b { display: block; width: var(--cell); text-align: center; font-weight: inherit; transform: translateY(var(--shift)); }
+  .bottom .num, .flap-bot .num { transform: translateY(-50%); }
+
+  /* hinge: thin gap across the middle + small side notches */
+  .card::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 50%;
+    height: max(2px, calc(var(--cw) * 0.012));
+    transform: translateY(-50%);
+    background: var(--bg); z-index: 5;
+  }
+  .card::before {
+    content: ""; position: absolute; z-index: 6; top: 50%;
+    left: calc(var(--cw) * -0.004); right: calc(var(--cw) * -0.004);
+    height: calc(var(--cw) * 0.05);
+    transform: translateY(-50%);
+    background:
+      linear-gradient(var(--bg), var(--bg)) left / calc(var(--cw) * 0.012) 100% no-repeat,
+      linear-gradient(var(--bg), var(--bg)) right / calc(var(--cw) * 0.012) 100% no-repeat;
+  }
+
+  .flap { display: none; z-index: 3; }
+  .flap::after {
+    content: ""; position: absolute; inset: 0; opacity: 0; pointer-events: none;
+    background: #000;
+    background: color-mix(in srgb, var(--card) 55%, #000);
+  }
+  .card.flipping .flap { display: block; }
+  .card.flipping .flap-top { transform-origin: 50% 100%; animation: flipTop var(--dur) ease-in forwards; }
+  .card.flipping .flap-top::after { animation: shadeIn var(--dur) ease-in forwards; }
+  .card.flipping .flap-bot { transform-origin: 50% 0%; transform: rotateX(90deg); animation: flipBot var(--dur) ease-out forwards; }
+  .card.flipping .flap-bot::after { animation: shadeOut var(--dur) ease-out forwards; }
+
+  @keyframes flipTop  { 0% { transform: rotateX(0); } 50%, 100% { transform: rotateX(-90deg); } }
+  @keyframes flipBot  { 0%, 50% { transform: rotateX(90deg); } 100% { transform: rotateX(0); } }
+  @keyframes shadeIn  { 0% { opacity: 0; } 50%, 100% { opacity: .3; } }
+  @keyframes shadeOut { 0%, 50% { opacity: .3; } 100% { opacity: 0; } }
+
+  .ampm {
+    position: absolute; z-index: 7;
+    left: calc(var(--cw) * 0.055); bottom: calc(var(--ch) * 0.13);
+    font: 700 calc(var(--cw) * 0.055)/1 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    letter-spacing: .03em;
+    color: var(--accent);
+  }
+
+  .date {
+    font: 500 calc(var(--cw) * 0.085)/1.2 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: var(--accent); letter-spacing: .03em; opacity: .85;
+    display: none;
+  }
+  body.show-date .date { display: block; }
+
+  /* ---------- Buttons ---------- */
+  .ui {
+    position: fixed; z-index: 20;
+    top: calc(env(safe-area-inset-top) + 16px);
+    right: calc(env(safe-area-inset-right) + 16px);
+    display: flex; gap: 10px;
+    opacity: 0; pointer-events: none; transition: opacity .35s ease;
+  }
+  body.show-ui .ui { opacity: 1; pointer-events: auto; }
+  .btn {
+    font: 600 14px/1 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #fff; background: rgba(40,40,44,.75);
+    border: 1px solid rgba(255,255,255,.18);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    padding: 11px 16px; border-radius: 999px; cursor: pointer;
+  }
+
+  /* ---------- Settings panel ---------- */
+  .panel {
+    position: fixed; z-index: 30; top: 0; right: 0; bottom: 0;
+    width: min(340px, 92vw);
+    padding: calc(env(safe-area-inset-top) + 20px) 20px calc(env(safe-area-inset-bottom) + 24px);
+    background: rgba(24,24,27,.9);
+    -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+    border-left: 1px solid rgba(255,255,255,.1);
+    color: #f5f5f7; font: 15px/1.4 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    transform: translateX(105%); transition: transform .35s cubic-bezier(.2,.8,.2,1);
+  }
+  body.panel-open .panel { transform: none; }
+  .panel-head { display: flex; justify-content: space-between; align-items: center; }
+  .panel h2 { font-size: 20px; margin: 0; }
+  .panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: #98989f; margin: 22px 0 8px; font-weight: 600; }
+  .close { background: rgba(255,255,255,.1); border: 0; color: #fff; width: 34px; height: 34px; border-radius: 50%; font-size: 18px; cursor: pointer; }
+
+  .themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .theme { border: 0; padding: 0; background: none; color: #ccc; font-size: 11px; cursor: pointer; }
+  .theme .sw {
+    height: 44px; border-radius: 10px; margin-bottom: 4px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(255,255,255,.12);
+  }
+  .theme .sw b { padding: 2px 7px; border-radius: 6px; font: 600 16px/1.2 "Oswald", sans-serif; }
+  .theme.active .sw { outline: 2px solid #0a84ff; outline-offset: 2px; }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .row > label:first-child { flex: 1; }
+  input[type=color] {
+    -webkit-appearance: none; appearance: none;
+    width: 44px; height: 30px; border: 1px solid rgba(255,255,255,.25);
+    border-radius: 8px; padding: 0; background: none; cursor: pointer;
+  }
+  input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+  input[type=color]::-webkit-color-swatch { border: 0; border-radius: 7px; }
+  input[type=color]::-moz-color-swatch { border: 0; border-radius: 7px; }
+  input[type=range] { width: 130px; accent-color: #0a84ff; }
+  select { background: rgba(255,255,255,.1); color: #fff; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 6px 8px; font-size: 14px; }
+  select option { color: #000; }
+
+  .switch { position: relative; width: 50px; height: 30px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: rgba(120,120,128,.4); transition: background .2s; cursor: pointer; }
+  .switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; border-radius: 50%; background: #fff; transition: transform .2s; box-shadow: 0 2px 4px rgba(0,0,0,.3); }
+  .switch input:checked + span { background: #34c759; }
+  .switch input:checked + span::after { transform: translateX(20px); }
+
+  .reset { margin-top: 20px; background: rgba(255,255,255,.1); }
+  .hint { color: #8e8e93; font-size: 12px; margin-top: 14px; }
+
+  .toast {
+    position: fixed; z-index: 40; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 28px);
+    transform: translate(-50%, 20px); opacity: 0;
+    background: rgba(40,40,44,.92); color: #fff; border-radius: 12px; padding: 12px 18px;
+    font: 14px/1.35 -apple-system, Arial, sans-serif; max-width: 90vw; text-align: center;
+    transition: opacity .3s, transform .3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body class="show-ui">
+
+<main class="stage" id="stage">
+  <div class="inner" id="inner">
+    <div class="clock" id="clock"></div>
+    <div class="date" id="date"></div>
+  </div>
+</main>
+
+<div class="ui">
+  <button class="btn" id="btnSettings">Customize</button>
+  <button class="btn" id="btnFull">Fullscreen</button>
+  <button class="btn" id="btnDone" style="display:none;background:#0a84ff">Done</button>
+</div>
+
+<aside class="panel" id="panel">
+  <div class="panel-head">
+    <h2>Customize</h2>
+    <button class="close" id="btnClose" aria-label="Close">✕</button>
+  </div>
+
+  <h3>Theme</h3>
+  <div class="themes" id="themes"></div>
+
+  <h3>Colors</h3>
+  <div class="row"><label for="c-digit">Digits</label><input type="color" id="c-digit" data-key="digit"></div>
+  <div class="row"><label for="c-accent">Accent (AM/PM, date)</label><input type="color" id="c-accent" data-key="accent"></div>
+  <div class="row"><label for="c-card">Cards</label><input type="color" id="c-card" data-key="card"></div>
+  <div class="row"><label for="c-bg">Background</label><input type="color" id="c-bg" data-key="bg"></div>
+  <div class="row"><label for="t-accentSeconds">Seconds in accent color</label><label class="switch"><input type="checkbox" id="t-accentSeconds" data-key="accentSeconds"><span></span></label></div>
+
+  <h3>Clock</h3>
+  <div class="row"><label for="t-h24">24-hour time</label><label class="switch"><input type="checkbox" id="t-h24" data-key="h24"><span></span></label></div>
+  <div class="row"><label for="t-seconds">Show seconds</label><label class="switch"><input type="checkbox" id="t-seconds" data-key="seconds"><span></span></label></div>
+  <div class="row"><label for="t-date">Show date</label><label class="switch"><input type="checkbox" id="t-date" data-key="date"><span></span></label></div>
+  <div class="row"><label for="s-font">Font</label>
+    <select id="s-font" data-key="font">
+      <option value="oswald">Tall (Oswald)</option>
+      <option value="bebas">Extra tall (Bebas)</option>
+      <option value="mono">Monospace</option>
+      <option value="helvetica">Helvetica</option>
+    </select>
+  </div>
+  <div class="row"><label for="r-scale">Size</label><input type="range" id="r-scale" data-key="scale" min="50" max="110" step="1"></div>
+
+  <h3>Position</h3>
+  <div class="row"><label for="s-posH">Horizontal</label>
+    <select id="s-posH" data-key="posH">
+      <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+    </select>
+  </div>
+  <div class="row"><label for="s-posV">Vertical</label>
+    <select id="s-posV" data-key="posV">
+      <option value="top">Top</option><option value="center">Center</option><option value="bottom">Bottom</option>
+    </select>
+  </div>
+  <div class="row"><label for="r-offX">Nudge left ↔ right</label><input type="range" id="r-offX" data-key="offX" min="-30" max="30" step="0.5"></div>
+  <div class="row"><label for="r-offY">Nudge up ↕ down</label><input type="range" id="r-offY" data-key="offY" min="-30" max="30" step="0.5"></div>
+  <div class="row"><label>Drag the clock to move it</label><label class="switch"><input type="checkbox" id="t-drag"><span></span></label></div>
+  <button class="btn reset" id="btnCenter" style="margin-top:12px">Re-center</button>
+
+  <h3>Motion &amp; screen</h3>
+  <div class="row"><label for="t-animate">Flip animation</label><label class="switch"><input type="checkbox" id="t-animate" data-key="animate"><span></span></label></div>
+  <div class="row"><label for="t-wake">Keep screen awake</label><label class="switch"><input type="checkbox" id="t-wake" data-key="wake"><span></span></label></div>
+  <div class="row"><label for="t-burnin">Burn-in protection</label><label class="switch"><input type="checkbox" id="t-burnin" data-key="burnin"><span></span></label></div>
+
+  <button class="btn reset" id="btnReset">Reset to defaults</button>
+  <p class="hint">Saved on this device. Tap the clock to show the buttons. Keys: F fullscreen, S settings.</p>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  const THEMES = {
+    bubblegum:  { name: "Bubblegum",      bg: "#ffd1e6", grad: "linear-gradient(160deg,#ffe3f1 0%,#ffc2df 100%)", card: "#ff8cc6", digit: "#ffffff", accent: "#ff4fa3" },
+    cotton:     { name: "Cotton Candy",   bg: "#f3dcff", grad: "linear-gradient(135deg,#ffd6ec 0%,#e3d5ff 55%,#cfe8ff 100%)", card: "#ffffff", digit: "#ff6fb5", accent: "#9d7bff" },
+    strawberry: { name: "Strawberry Milk",bg: "#fff0f4", grad: "linear-gradient(180deg,#fff7f9 0%,#ffe1ea 100%)", card: "#ff9dbb", digit: "#ffffff", accent: "#ff5c88" },
+    lavender:   { name: "Lavender",       bg: "#ece4ff", grad: "linear-gradient(160deg,#f5f0ff 0%,#dfd3ff 100%)", card: "#c4b0ff", digit: "#ffffff", accent: "#8a63ff" },
+    peach:      { name: "Peachy",         bg: "#ffe6d9", grad: "linear-gradient(160deg,#fff1e8 0%,#ffd5c7 100%)", card: "#ffab97", digit: "#ffffff", accent: "#f0707f" },
+    mint:       { name: "Mint Cream",     bg: "#dcf8ec", grad: "linear-gradient(160deg,#effff8 0%,#c9f2e0 100%)", card: "#ffffff", digit: "#4fc79a", accent: "#ff8cc6" },
+    sky:        { name: "Baby Blue",      bg: "#dcefff", grad: "linear-gradient(160deg,#eef7ff 0%,#cde6ff 100%)", card: "#9fd0ff", digit: "#ffffff", accent: "#ff8cc6" },
+    lemon:      { name: "Lemonade",       bg: "#fff8d6", grad: "linear-gradient(160deg,#fffbe8 0%,#ffefb0 100%)", card: "#ffffff", digit: "#f5a623", accent: "#ff8cc6" },
+    nightpink:  { name: "Pink Night",     bg: "#1c0b16", grad: "radial-gradient(circle at 50% 40%,#3a1430 0%,#14070f 75%)", card: "#2f1226", digit: "#ff9fd0", accent: "#ff5fae" },
+  };
+
+  // size = digit height vs card, cell = width of each digit (fixed => monospace), shift = vertical nudge
+  const FONTS = {
+    oswald:    { family: '"Oswald", "Arial Narrow", sans-serif',          size: 0.88, cell: "0.49em", shift: "-0.035em", weight: 600 },
+    bebas:     { family: '"Bebas Neue", "Arial Narrow", sans-serif',      size: 1.04, cell: "0.42em", shift: "0.02em",  weight: 400 },
+    mono:      { family: '"Roboto Mono", ui-monospace, Menlo, monospace', size: 0.78, cell: "0.62em", shift: "0em",     weight: 600 },
+    helvetica: { family: '"Helvetica Neue", Helvetica, Arial, sans-serif',size: 0.78, cell: "0.58em", shift: "0em",     weight: 600 },
+  };
+
+  const DEFAULTS = {
+    theme: "bubblegum", bg: "#ffd1e6", grad: "linear-gradient(160deg,#ffe3f1 0%,#ffc2df 100%)",
+    card: "#ff8cc6", digit: "#ffffff", accent: "#ff4fa3",
+    accentSeconds: false, h24: true, seconds: true, date: false,
+    font: "oswald", scale: 100, animate: true, wake: false, burnin: true,
+    posH: "center", posV: "center", offX: 0, offY: 0,
+  };
+  const COLOR_KEYS = ["bg", "grad", "card", "digit", "accent"];
+  const STORE_KEY = "flipclock.v3";
+  const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k]]));
+
+  function load() {
+    let s;
+    try { s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORE_KEY) || "{}") }; }
+    catch { s = { ...DEFAULTS }; }
+    // URL presets, e.g. ?theme=amber&seconds=0&h24=0&digit=%23ff0000
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (k === "theme" && THEMES[v]) Object.assign(s, pick(THEMES[v], COLOR_KEYS), { theme: v, grad: THEMES[v].grad || "" });
+      else if (k in DEFAULTS) {
+        const d = DEFAULTS[k];
+        s[k] = typeof d === "boolean" ? !["0", "false", "no", "off"].includes(v)
+             : typeof d === "number" ? (Number(v) || d) : v;
+      }
+    }
+    return s;
+  }
+  const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch {} };
+
+  let S = load();
+  const $ = id => document.getElementById(id);
+  const body = document.body, root = document.documentElement, stage = $("stage");
+  let cards = [], ampmEl = null, builtSeconds = null;
+
+  /* ---------- One card per group, flips as a whole (like Fliqlo) ---------- */
+  function makeCard() {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML =
+      '<div class="half top"><div class="num"></div></div>' +
+      '<div class="half bottom"><div class="num"></div></div>' +
+      '<div class="flap flap-top"><div class="num"></div></div>' +
+      '<div class="flap flap-bot"><div class="num"></div></div>';
+    const [top, bot, ftop, fbot] = el.querySelectorAll(".num");
+    return { el, top, bot, ftop, fbot, value: null, timer: 0 };
+  }
+  const html = v => [...v].map(d => `<b>${d}</b>`).join("");
+
+  function setCard(c, v, animate) {
+    if (c.value === v) return;
+    const prev = c.value;
+    c.value = v;
+    clearTimeout(c.timer);
+    if (!animate || prev === null || document.hidden) {
+      c.top.innerHTML = c.bot.innerHTML = html(v);
+      c.el.classList.remove("flipping");
+      return;
+    }
+    c.top.innerHTML  = html(v);
+    c.bot.innerHTML  = html(prev);
+    c.ftop.innerHTML = html(prev);
+    c.fbot.innerHTML = html(v);
+    c.el.classList.remove("flipping");
+    void c.el.offsetWidth;
+    c.el.classList.add("flipping");
+    c.timer = setTimeout(() => {
+      c.bot.innerHTML = html(v);
+      c.el.classList.remove("flipping");
+    }, 520);
+  }
+
+  function build() {
+    const clock = $("clock");
+    clock.innerHTML = "";
+    cards = [];
+    const n = S.seconds ? 3 : 2;
+    for (let i = 0; i < n; i++) {
+      const c = makeCard();
+      clock.appendChild(c.el);
+      cards.push(c);
+    }
+    ampmEl = document.createElement("div");
+    ampmEl.className = "ampm";
+    cards[0].el.appendChild(ampmEl);
+    builtSeconds = S.seconds;
+  }
+
+  /* ---------- Time ---------- */
+  const pad = n => String(n).padStart(2, "0");
+  let tickTimer = 0;
+  function tick(animate = S.animate) {
+    const now = new Date();
+    let h = now.getHours(), ampm = "", hs;
+    if (S.h24) hs = pad(h);
+    else { ampm = h < 12 ? "AM" : "PM"; hs = String(h % 12 || 12); }   // 12h: "2" like Fliqlo
+
+    const parts = [hs, pad(now.getMinutes())];
+    if (S.seconds) parts.push(pad(now.getSeconds()));
+    parts.forEach((p, i) => setCard(cards[i], p, animate));
+    ampmEl.textContent = ampm;
+
+    if (S.date) $("date").textContent = now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+    clearTimeout(tickTimer);
+    tickTimer = setTimeout(() => tick(), 1000 - now.getMilliseconds() + 10);
+  }
+
+  /* ---------- Apply settings ---------- */
+  function apply() {
+    const f = FONTS[S.font] || FONTS.oswald;
+    const vars = {
+      "--bg": S.bg, "--bgimg": S.grad || S.bg, "--card": S.card, "--digit": S.digit, "--accent": S.accent,
+      "--font": f.family, "--fsize": f.size, "--cell": f.cell, "--shift": f.shift, "--weight": f.weight,
+      "--scale": S.scale, "--ox": S.offX + "vw", "--oy": S.offY + "vh",
+    };
+    for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+    document.querySelector('meta[name="theme-color"]').content = S.bg;
+
+    const flex = { left: "flex-start", top: "flex-start", center: "center", right: "flex-end", bottom: "flex-end" };
+    stage.style.alignItems = flex[S.posH] || "center";
+    stage.style.justifyContent = flex[S.posV] || "center";
+    $("inner").style.alignItems = flex[S.posH] || "center";   // date follows the clock's side
+
+    body.classList.toggle("no-seconds", !S.seconds);
+    body.classList.toggle("show-date", S.date);
+    if (builtSeconds !== S.seconds) build();
+    if (cards[2]) cards[2].el.classList.toggle("accent", S.accentSeconds);
+    if (!S.burnin) stage.style.transform = "";
+
+    cards.forEach(c => c.value = null);   // redraw without animation
+    tick(false);
+    syncInputs();
+    renderThemes();
+  }
+
+  function renderThemes() {
+    const wrap = $("themes");
+    if (!wrap.childElementCount) {
+      for (const [key, t] of Object.entries(THEMES)) {
+        const b = document.createElement("button");
+        b.className = "theme"; b.dataset.theme = key;
+        b.innerHTML = `<div class="sw" style="background:${t.grad || t.bg}"><b style="background:${t.card};color:${t.digit}">2 34</b></div>${t.name}`;
+        b.addEventListener("click", () => { Object.assign(S, pick(t, COLOR_KEYS), { theme: key }); save(); apply(); });
+        wrap.appendChild(b);
+      }
+    }
+    wrap.querySelectorAll(".theme").forEach(b => b.classList.toggle("active", b.dataset.theme === S.theme));
+  }
+
+  function syncInputs() {
+    document.querySelectorAll("[data-key]").forEach(inp => {
+      const v = S[inp.dataset.key];
+      if (inp.type === "checkbox") inp.checked = !!v; else inp.value = v;
+    });
+  }
+  document.querySelectorAll("[data-key]").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const k = inp.dataset.key;
+      S[k] = inp.type === "checkbox" ? inp.checked : inp.type === "range" ? Number(inp.value) : inp.value;
+      if (COLOR_KEYS.includes(k)) S.theme = "custom";
+      if (k === "bg") S.grad = "";   // picking your own background = solid color
+      if (k === "wake") S.wake ? requestWake() : releaseWake();
+      save(); apply();
+    });
+  });
+  $("btnReset").addEventListener("click", () => { S = { ...DEFAULTS, wake: S.wake }; save(); apply(); toast("Reset to defaults"); });
+
+  /* ---------- Position: re-center + drag to move ---------- */
+  $("btnCenter").addEventListener("click", () => {
+    Object.assign(S, { posH: "center", posV: "center", offX: 0, offY: 0 }); save(); apply();
+  });
+  let dragOn = false, drag = null;
+  $("t-drag").addEventListener("change", e => {
+    dragOn = e.target.checked;
+    body.classList.toggle("dragging-mode", dragOn);
+    if (dragOn) { closePanel(); toast("Drag the clock with your finger, then tap Done"); $("btnDone").style.display = ""; }
+    else $("btnDone").style.display = "none";
+  });
+  $("btnDone").addEventListener("click", e => {
+    e.stopPropagation(); dragOn = false; $("t-drag").checked = false;
+    body.classList.remove("dragging-mode"); $("btnDone").style.display = "none";
+  });
+  const inner = $("inner");
+  inner.addEventListener("pointerdown", e => {
+    if (!dragOn) return;
+    drag = { x: e.clientX, y: e.clientY, ox: S.offX, oy: S.offY };
+    inner.setPointerCapture(e.pointerId);
+  });
+  inner.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const clamp = v => Math.max(-30, Math.min(30, Math.round(v * 2) / 2));
+    S.offX = clamp(drag.ox + (e.clientX - drag.x) / innerWidth * 100);
+    S.offY = clamp(drag.oy + (e.clientY - drag.y) / innerHeight * 100);
+    root.style.setProperty("--ox", S.offX + "vw");
+    root.style.setProperty("--oy", S.offY + "vh");
+  });
+  const endDrag = () => { if (drag) { drag = null; save(); syncInputs(); } };
+  inner.addEventListener("pointerup", endDrag);
+  inner.addEventListener("pointercancel", endDrag);
+
+  /* ---------- Panel + auto-hiding buttons ---------- */
+  let uiTimer = 0;
+  function showUI() {
+    body.classList.add("show-ui"); body.classList.remove("hide-cursor");
+    clearTimeout(uiTimer);
+    uiTimer = setTimeout(() => {
+      if (body.classList.contains("panel-open")) return;
+      body.classList.remove("show-ui"); body.classList.add("hide-cursor");
+    }, 3000);
+  }
+  const openPanel  = () => { body.classList.add("panel-open"); showUI(); };
+  const closePanel = () => { body.classList.remove("panel-open"); showUI(); };
+  $("btnSettings").addEventListener("click", e => { e.stopPropagation(); openPanel(); });
+  $("btnClose").addEventListener("click", e => { e.stopPropagation(); closePanel(); });
+  $("panel").addEventListener("click", e => e.stopPropagation());
+  stage.addEventListener("click", () => body.classList.contains("panel-open") ? closePanel() : showUI());
+  document.addEventListener("pointermove", e => { if (e.pointerType === "mouse") showUI(); });
+
+  /* ---------- Fullscreen ---------- */
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const canFS = !!(root.requestFullscreen || root.webkitRequestFullscreen);
+  const standalone = matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches || navigator.standalone;
+  function toggleFullscreen() {
+    if (!canFS) { toast(standalone ? "Already full screen" : "Use Share → Add to Home Screen for full screen"); return; }
+    if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+  }
+  $("btnFull").addEventListener("click", e => { e.stopPropagation(); toggleFullscreen(); });
+  const syncFS = () => { $("btnFull").textContent = fsEl() ? "Exit fullscreen" : "Fullscreen"; };
+  document.addEventListener("fullscreenchange", syncFS);
+  document.addEventListener("webkitfullscreenchange", syncFS);
+  if (standalone) $("btnFull").style.display = "none";
+
+  /* ---------- Keep screen awake ---------- */
+  let wakeLock = null;
+  async function requestWake() {
+    if (!("wakeLock" in navigator)) { toast("Not supported here — set Auto-Lock to Never in device settings"); return; }
+    try { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => wakeLock = null); }
+    catch { /* retried on next tap */ }
+  }
+  function releaseWake() { if (wakeLock) wakeLock.release(); wakeLock = null; }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (S.wake) requestWake();
+    cards.forEach(c => c.value = null); tick(false);
+  });
+  document.addEventListener("click", () => { if (S.wake && !wakeLock) requestWake(); });
+
+  /* ---------- Burn-in drift (tiny move every minute) ---------- */
+  setInterval(() => {
+    if (!S.burnin) return;
+    const r = () => ((Math.random() * 2 - 1) * 1.2).toFixed(2);
+    stage.style.transform = `translate(${r()}vmin, ${r()}vmin)`;
+  }, 60000);
+
+  document.addEventListener("keydown", e => {
+    if (/INPUT|SELECT/.test(e.target.tagName)) return;
+    const k = e.key.toLowerCase();
+    if (k === "f") toggleFullscreen();
+    else if (k === "s") body.classList.contains("panel-open") ? closePanel() : openPanel();
+    else if (k === "escape") closePanel();
+  });
+
+  let toastTimer = 0;
+  function toast(msg) {
+    const t = $("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 3500);
+  }
+
+  build();
+  apply();
+  showUI();
+  if (S.wake) requestWake();
+  // re-measure once the bundled font has loaded
+  if (document.fonts) document.fonts.ready.then(() => { cards.forEach(c => c.value = null); tick(false); });
+})();
+</script>
+</body>
+</html>
